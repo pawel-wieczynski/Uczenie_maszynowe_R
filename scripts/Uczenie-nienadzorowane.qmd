@@ -1,0 +1,171 @@
+---
+title: "Uczenie nienadzorowane"
+author: "Paweł Wieczyński"
+format: html
+editor: visual
+---
+
+```{r}
+pacman::p_load(tidyverse, plotly, cluster, factoextra)
+options(scipen = 20)
+theme_set(theme_bw())
+```
+
+## Grupowanie wokół średnich
+
+Jedną z najprostszych metod grupowania danych jest grupowanie wokół średnich (ang. *k-means clustering*). W tej metodzie, dane są grupowane w taki sposób, aby minimalizować odległość między środkami grup a obserwacjami wewnątrz grup.
+
+Algorytm działa następująco:
+
+1.  Wybierz liczbę grup, które chcesz utworzyć.
+
+2.  Wybierz losowo punkty, które będą początkowymi środkami grup.
+
+3.  Przypisz każdą obserwację do najbliższego środka grup.
+
+4.  Oblicz nowe środki grup.
+
+5.  Powtarzaj kroki 3 i 4, aż środki grup przestaną się zmieniać.
+
+Algorytm ten jest bardzo prosty, ale ma kilka wad:
+
+-   liczba grup musi być z góry określona
+
+-   algorytm jest wrażliwy na początkowe wartości środków grup
+
+-   algorytm może zatrzymać się w lokalnym minimum.
+
+Inne praktyczne problemy to:
+
+-   definicja *środka grupy* - tu najczęściej stosuje się średnią arytmetyczną, ale można też użyć innych miar centralnych, np. medianę
+
+-   mierzenie odległości - tu najczęściej stosuje się odległość euklidesową, ale można też użyć innych miar odległości, np. odległość Manhattan.
+
+```{r}
+data(iris)
+set.seed(123)
+iris_scaled = scale(iris[, 1:4])
+iris_kmeans = kmeans(
+  iris_scaled # dane przeskalowane
+  , centers = 3 # ilość grup
+  , nstart = 100 # powtarzamy algorytm wielokrotnie, poniewaz losowe przypisanie grup początkowych moze prowadzic do suboptymalnego rozwiązania
+)
+iris_kmeans$cluster
+```
+
+Wizualizacja wyników grupowania:
+
+```{r}
+iris %>%
+  mutate(cluster = as.factor(iris_kmeans$cluster)) %>%
+  ggplot(aes(Sepal.Length, Sepal.Width, color = cluster, shape = Species)) +
+  geom_point() +
+  theme(legend.position = "top")
+```
+
+Wizualizacja w 3D:
+
+```{r}
+iris %>%
+  mutate(cluster = as.factor(iris_kmeans$cluster)) %>%
+  plot_ly(
+    x = ~Sepal.Length
+    , y = ~Sepal.Width
+    , z = ~Petal.Length
+    , color = ~cluster
+  )
+```
+
+Wizualizacja grupowania za pomocą biblioteki `factoextra`:
+
+```{r}
+fviz_cluster(
+  iris_kmeans # wynik algorytmu grupowania
+  , data = iris[, 1:4] # Oryginalne dane
+  , geom = "point" # rodzaj wykresu
+  , ellipse.type = "convex"
+  #, ellipse = FALSE
+  , axes = c(1,2)
+)
+```
+
+### Analiza składowych głównych
+
+```{r}
+model_pca = prcomp(iris_scaled)
+model_pca
+summary(model_pca)
+```
+
+### Dobór optymalnej ilości grup
+
+Jedną z najprostszych metod wyboru optymalnej ilości grup jest tzw. metoda łokcia (ang. *elbow method*). Polega ona na wyborze ilości grup, dla której wartość błędu *total within-cluster sum of squares* zaczyna maleć wolniej.
+
+```{r}
+set.seed(123)
+kmeans_elbow = map_dbl(
+  1:10, ~kmeans(iris[, 1:4], centers = .x)$tot.withinss)
+
+tibble(k = as.factor(1:10), withinss = kmeans_elbow) %>%
+  ggplot(aes(k, withinss, group = 1)) +
+  geom_line() +
+  geom_point() +
+  geom_vline(xintercept = 3, linetype = "dashed") +
+  labs(title = "Metoda łokcia", x = "Liczba grup", y = "Błąd wewnątrzgrupowy")
+
+```
+
+Bardziej zaawansowaną metodą jest metoda Silhouette. Polega ona na obliczeniu dla każdej obserwacji wartości *silhouette width*, która jest miarą jakości grupowania. Wartość ta jest zdefiniowana jako:
+
+$$ s(i) = \frac{b(i) - a(i)}{\max(a(i), b(i))} $$
+
+gdzie:
+
+-   $a(i)$ - średnia odległość między obserwacją $i$ a innymi obserwacjami w tej samej grupie,
+
+-   $b(i)$ - średnia odległość między obserwacją $i$ a obserwacjami z innych grup.
+
+Wartość $s(i)$ przyjmuje wartości z przedziału $[-1, 1]$. Wartości bliskie $1$ oznaczają, że obserwacja jest dobrze przypisana do grupy, wartości bliskie $-1$ oznaczają, że obserwacja jest źle przypisana do grupy, a wartości bliskie $0$ oznaczają, że obserwacja jest na granicy między grupami.
+
+Optymalna ilość grup to taka, dla której wartość *silhouette width* jest największa.
+
+```{r}
+set.seed(123)
+silhouette_width <- map_dbl(2:10, function(k) {
+  # liczymy algorytm kmeans
+  km_res = kmeans(iris[, 1:4], centers = k)
+  # liczymy odległości miedzy wszystkimi punktami
+  distance = dist(iris[, 1:4])
+  # liczymy silhouette width
+  sil_widths = silhouette(km_res$cluster, distance)
+  
+  # patrzymy na średnią wartosc silhouette width
+  mean(sil_widths[, "sil_width"])
+})
+
+tibble(k = as.factor(2:10), silhouette = silhouette_width) %>%
+  ggplot(aes(k, silhouette, group = 1)) +
+  geom_line() +
+  geom_point() +
+  geom_vline(xintercept = 2, linetype = "dashed") +
+  labs(title = "Metoda Silhouette", x = "Liczba grup", y = "Średnia szerokość Silhouette")
+```
+
+### Zadania
+
+1.  Wczytaj zbiór danych `k_means_example.csv`
+
+2.  Zastosuj algorytm *kmeans* z dwoma klastrami.
+
+3.  Dokonaj skalowania zmiennych. Czy wynik się zmienił?
+
+4.  Wczytaj zbiór danych `USArrests`.
+
+5.  Znajdź optymalną ilość grup za pomocą metody *kmeans*.
+
+6.  Wczytaj zbiór danych `baseball.csv`
+
+7.  Znajdź optymalną ilość grup za pomocą metody *kmeans*.
+
+8.  Stwórz wizualizację w 3D.
+

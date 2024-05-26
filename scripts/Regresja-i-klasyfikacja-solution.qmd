@@ -1,0 +1,702 @@
+---
+title: "Regresja liniowa, regresja logistyczna, algorytm k najbliższych sąsiadów"
+author: "Paweł Wieczyński"
+format: html
+editor: visual
+---
+
+```{r}
+pacman::p_load(tidyverse, broom, car, GGally, caret, ISLR, pROC, class, glmnet)
+options(scipen = 20)
+theme_set(theme_bw())
+```
+
+## Regresja liniowa
+
+### Przykład z jedną zmienną objaśniającą
+
+#### Krok 1: Przygotowanie danych
+
+-   wczytujemy dane
+
+-   sprawdzamy strukturę danych, podstawowe statystyki opisowe
+
+-   sprawdzamy dane wizualnie za pomocą wykresów
+
+-   modyfikacja zmiennych, dodanie nowych zmiennych
+
+-   podział danych na zbiór uczący, zbiór testowy, zbiór walidacyjny (pominiemy w tym przykładzie).
+
+```{r}
+cars = datasets::cars
+str(cars)
+summary(cars)
+
+cars$speed = cars$speed * 1.609344
+cars$dist = cars$dist * 0.3048
+```
+
+```{r}
+ggplot(cars, aes(x = speed, y = dist)) +
+  geom_point()
+```
+
+```{r}
+cars %>%
+  pivot_longer(
+    cols = 1:2
+    , values_to = 'value'
+    , names_to = 'variable'
+  ) %>%
+  ggplot(aes(y = value, fill = variable)) +
+  geom_boxplot()
+```
+
+#### Krok 2: Trenowanie modelu
+
+Równanie regresji liniowej ma postać:
+
+$$ y_i = \alpha + \beta \ x_i + \epsilon_i $$
+
+dla $i = 1, 2, \dots, n$ gdzie:
+
+-   $y_i$ nazywamy zmienną zależną / zmienną objaśnianą / zmienną celu
+
+-   $x_i$ nazywamy zmienną niezależną / zmienną objaśniającą / regresorem
+
+-   $\alpha, \beta$ to parametry regresji, które chcemy oszacować
+
+-   $\epsilon_i$ to składnik losowy / reszty modelu, czyli różnice między wartościami obserwacji $y_i$ a wartościami prognozowanymi przez model $\widehat{y_i}$.
+
+Spośród wszystkich możliwych kombinacji $\alpha, \beta$ wybieramy takie $\widehat{\alpha}, \widehat{\beta}$, które minimalizują sumę kwadratów reszt, tzn.
+
+$$ \sum_{i=1}^n \epsilon_i^2 = \sum_{i=1}^n \left( y_i - \widehat{y} \right)^2 \ \longrightarrow \ \min $$ Jest to tzw. **metoda najmniejszych kwadratów** (ang. metoda OLS).
+
+```{r}
+model_1 = lm(
+  dist ~ speed
+  , data = cars
+)
+
+cars$speed2 = cars$speed^2
+
+model_2 = lm(
+  dist ~ speed + speed2
+  , data = cars
+)
+
+ model_2 = lm(
+   dist ~ speed + I(speed^2)
+   , data = cars
+)
+```
+
+#### Krok 3: Ocena modelu
+
+Za pomocą funkcji *summary()* wyświetlamy podsumowanie modelu. Elementy, na które warto zwrócić uwagę, to:
+
+-   *Estimate* - oszacowania współczynników regresji $\widehat{\alpha}, \widehat{\beta}$
+
+-   *Pr(\>\|t\|)* - wartości *p-value* oznaczające czy dane współczynniki regresji są istotne statystycznie; na ogół przyjmujemy, że współczynniki są istotne, jeżeli *p-value* jest mniejsze od $0.05$
+
+-   *F-statistic* - test sprawdzający, czy model jako całość jest istotny statystycznie; na ogół przyjmujemy, że model jest istotny, jeśli *p-value* odpowiadająca temu testowi jest mniejsza od $0.05$
+
+-   *Multiple R-squared* - współczynnik determinancji $R^2$ oznacza jaki odsetek zmienności zmiennej zależnej został wyjaśniony przez ten model. Wartość $R^2$ przyjmuje wartości od $0$ do $1$, przy czym im większa wartość, tym lepiej dopasowany model.
+
+-   *Adjusted R-squared* - skorygowany $R^2$ nakłada dodatkową penalizację na ilość zmiennych w modelu.
+
+```{r}
+summary(model_1)
+summary(model_2)
+```
+
+```{r}
+ggplot(cars, aes(x = speed, y = dist)) +
+  geom_point() +
+  geom_smooth(method = 'lm', se = FALSE, formula = 'y ~ x') +
+  geom_smooth(method = 'lm', se = FALSE, formula = 'y ~ x + I(x^2)', color = 'red')
+```
+
+#### Krok 4: Prognozowanie
+
+```{r}
+new_data = data.frame(
+  speed = c(30, 50, 80)
+)
+
+predict(model_1, new_data)
+predict(model_2, new_data)
+```
+
+Do oceny jakości prognoz mamy wiele różnych miar. Najpopularniejsze z nich to:
+
+-   Współczynnik $R^2$, który możemy policzyć również jako kwadrat korelacji między $y$ oraz $\widehat{y}$
+
+-   Pierwiastek z błędu średniokwadratowego (ang. *RMSE*)
+
+    $$ \text{RMSE} = \sqrt{ \frac{1}{n} \sum_{i=1}^n \left( y_i - \widehat{y_i} \right)^2  } $$
+
+-   Średni błąd absolutny (ang. *MAE*)
+
+    $$ \text{MAE} = \frac{1}{n} \sum_{i=1}^n \left| y_i - \widehat{y_i} \right|$$
+
+```{r}
+y = cars$dist
+y_hat = model_1$fitted.values
+n = nrow(cars)
+
+sqrt(sum((y - y_hat)^2) / n)
+
+sqrt(sum((y - y_hat)^2) / n) / mean(cars$dist)
+
+caret::RMSE(pred = y_hat, obs = y)
+```
+
+Jeśli mamy kilka modeli, to przy wyborze ostatecznego modelu mogą pomóc **kryteria informacyjne**. Najpopularniejsze z nich to AIC oraz BIC. Im mniejsza wartość, tym lepszy model.
+
+```{r}
+AIC(model_1)
+AIC(model_2)
+```
+
+### Przykład z wieloma zmiennymi objaśniającymi
+
+Równanie regresji rozszerzamy o dodatkowe zmienne $x$ oraz dodatkowe parametry $\beta$, które musimy oszacować:
+
+$$
+y_i = \beta_0 + \beta_1 \ x_{i1} + \dots + \beta_k x_{ik} + \epsilon_i
+$$
+
+```{r}
+df = read.csv(
+  'data\\insurance.csv'
+  , stringsAsFactors = TRUE
+)
+
+# Podział danych
+train_index = sample(
+  1:nrow(df)
+  , size = floor(0.70 * nrow(df))
+)
+
+df_train = df[train_index, ]
+df_test = df[-train_index, ]
+```
+
+```{r}
+GGally::ggpairs(df %>% select_if(is.numeric)
+                , progress = FALSE)
+
+ggplot(df, aes(x = age, y = charges)) +
+  geom_point(aes(color = smoker, shape = sex))
+
+ggplot(df, aes(x = age, y = charges)) +
+  geom_point(aes(color = sex))
+```
+
+```{r}
+model_1 = lm(
+  charges ~ .
+  , data = df_train
+)
+
+summary(model_1)
+
+model_2 = lm(
+  charges ~ .-sex-region
+  , data = df_train
+)
+
+summary(model_2)
+```
+
+```{r}
+y_hat_1 = predict(model_1, newdata = df_test)
+y_hat_2 = predict(model_2, newdata = df_test)
+
+RMSE(y_hat_1, df_test$charges)
+RMSE(y_hat_2, df_test$charges)
+```
+
+### Zadania
+
+1.  Wczytaj zbiór danych `kc_house_data.csv`. Usuń niepotrzebne zmienne.
+
+2.  Podziel dane na zbiór treningowy, walidacyjny oraz testowy.
+
+3.  Wybierz podzbiór zmiennych objaśniających, aby zminimalizować błąd prognozy na zbiorze walidacyjnym.
+
+4.  Dokonaj finalnej oceny modelu na zbiorze testowym.
+
+## Regresja logistyczna
+
+W tym wypadku zmienna celu jest binarna, tzn. przyjmuje wartości 0 lub 1. Oznaczmy $p_i \in \left[ 0,1 \right]$ jako prawdopodobieństwo, że $y_i =1$. Równanie zwane **modelem logitowym** ma postać::
+
+$$
+\ln \left( \frac{p_i}{1-p_i} \right) = \beta_0 + \beta_1  x_{i1} + \dots \beta_k x_{ik} + \epsilon
+$$
+
+#### Krok 1: Przygotowanie danych
+
+```{r}
+data(Default)
+table(Default$default)
+```
+
+```{r}
+ggpairs(Default)
+```
+
+Problem niezbalansowania zmiennych - modele predykcyjne mogą być obciążone w kierunku liczniejszej klasy, tzw. *Acurracy paradox*. Kilka metod na obejście tego problemu:
+
+-   *undersampling* - ryzyko utraty informacji z pominiętych obserwacji
+
+-   *oversampling* - ryzyko przetrenowania, utrata niezależności zbioru treningowego oraz zbioru testowego
+
+-   *rose* - nowe obserwacje są generowane z gęstości rozkładu prawdopodobieństwa obu klas.
+
+```{r}
+set.seed(123)
+df = caret::downSample(
+  x = Default %>% select(-default)
+  , y = Default %>% pull(default)
+  , yname = 'default'
+)
+
+table(df$default)
+```
+
+#### Krok 2: Trenowanie modelu
+
+```{r}
+model_1 = glm(
+  default ~ .
+  , data = df
+  # jak nie podamy parametru family to dopasuje zwykły model liniowy tak jak za pomocą lm()
+  , family = binomial(link = 'logit')
+)
+
+levels(df$default)
+
+summary(model_1)
+```
+
+#### Krok 3: Ocena modelu
+
+Funkcja `glm` w przypadku regresji logitycznej podaje współczynniki dla *non-reference level* danego faktora, w tym wypadku będzie to odpowiedź *Yes*.
+
+```{r}
+
+```
+
+#### Krok 4: Prognozowanie
+
+```{r}
+y_hat_prob = predict(
+  model_1
+  , newdata = df
+  , type = 'response'
+)
+
+hist(y_hat_prob, breaks = 20)
+```
+
+Zarówno `fitted.values` jak i wynik funkcji `predict` jest wartością z przedziału $[0,1]$, zatem musimy ustalić jakiś próg, aby zaklasyfikować prognozy do odpowiednich kategorii.
+
+```{r}
+y_hat = ifelse(y_hat_prob > 0.5, 'Yes', 'No') %>% as.factor()
+
+table(
+  df$default
+  , y_hat
+)
+
+(289 + 298) / 666
+```
+
+**Macierz kontyngencji** podaje nam łączny rozkład zmiennej $y$ oraz prognoz $\widehat{y}$. Poszczególne elementy tej macierzy nazywamy następująco:
+
+-   TP - *true positive* (1,1)
+
+-   FN - *false negative* (1,2)
+
+-   FP - *false positive* (2,1)
+
+-   TN - *true negative* (2,2)
+
+Na podstawie macierzy kontyngencji możemy obliczyć kilka często używanych metryk jakości prognoz:
+
+-   Dokładność (ang. *accuracy*)
+
+    $$\text{ACC} = \frac{\text{TP + TN}}{\text{P + N}}$$
+
+-   Czułość (ang. *sensitivity*, *recall*)
+
+    $$
+    \text{TPR} = \frac{\text{TP}}{\text{P}}
+    $$
+
+-   Specyfikacja (ang. *specificity*)
+
+    $$
+    \text{TNR} = \frac{\text{TN}}{\text{N}}
+    $$
+
+-   Precyzja (ang. *precision*)
+
+    $$\text{PPV} = \frac{\text{TP}}{\text{PP}}$$
+
+-   Współczynnik $F_1$
+
+    $$ F_1 = \frac{\text{2TP}}{\text{2TP + FP + FN}} $$
+
+Przydatny link: <https://en.wikipedia.org/wiki/Sensitivity_and_specificity> lub dokumentacja funkcji `caret::confusionMatrix`.
+
+Do porównywania kilku modeli możemy też wykorzystać kryteria informacyjne AIC lub BIC.
+
+```{r}
+confusionMatrix(
+  data = y_hat
+  , reference = df$default
+  , positive = 'No'
+)
+```
+
+Jak widzieliśmy powyżej, funkcja `predict` przewiduje prawdopodobieństwo zdarzenia, że użytkownik karty kredytowej zbankrutuje. Jako próg klasyfikacji przyjęliśmy $50\%$, aczkolwiek możemy przyjąć zupełnie inny próg. Zależnie od przedmiotu badań, ten próg może być mniejszy lub większy. Na przykład przy diagnozowaniu pacjentów, jeśli model przewiduje, że prawdopodobieństwo zachorowania pacjenta wynosi $10\%$, to klasyfikujemy go do grupy ryzyka i poddajemy dalszym badaniom.
+
+Jak zatem zmieniają się posczególne metryki błędów w zależności od przyjętego progu?
+
+-   ROC (*receiver operating characteristic*) - na osi $x$ zaznaczamy FPR, na osi $y$ zaznaczamy TPR
+
+-   AUC (*area under curve*) - pole pod wykresem ROC:
+
+    -   wartość $0.5$ miałby model który po prostu by strzelał, tzn. w sposób losowy przydzielał obserwacje do poszczególnych klas
+
+    -   wartość $1$ ma model idealnie odseparowujący obie klasy
+
+    -   wartość $0$ ma model, który przypisuje obserwacje do przeciwnej klasy (błąd w kodowaniu zmiennych?)
+
+Chcemy zatem aby AUC było jak największe i koniecznie powyżej wartości $0.5$.
+
+```{r}
+roc = data.frame(
+  threshold = seq(0, 1, by = 0.01)
+  , TPR = NA
+  , FPR = NA
+)
+
+for (i in 1:nrow(roc)) {
+  y_hat = ifelse(
+    y_hat_prob > roc$threshold[i]
+    , 'Yes'
+    , 'No'
+  ) %>% as.factor()
+  
+  conf_matrix = table(df$default, y_hat) %>% as.matrix()
+  
+  roc$FPR[i] = conf_matrix[2,1] / sum(conf_matrix[1, ])
+  roc$TPR[i] = conf_matrix[1,1] / sum(conf_matrix[1, ])
+}
+
+ggplot(roc, aes(x = FPR, y = TPR)) +
+  geom_point()
+```
+
+```{r}
+roc_2 = pROC::roc(
+  df$default
+  , y_hat_prob
+)
+
+plot(roc_2)
+
+pROC::auc(roc_2)
+```
+
+### Zadania
+
+1.  Wczytaj zbiór danych `heart.disease.csv`
+
+2.  Przygotuj dane: usuń lub zastąp wartości brakujące, sprawdź czy są wartości odstające (tzw. *outliery*), podziel dane zbiór treningowy, walidacyjny oraz testowy.
+
+3.  Zbuduj model regresji logistycznej, aby zminimalizować błąd walidacyjny.
+
+4.  Dokonaj finalnej oceny modelu na zbiorze testowym.
+
+Jeśli algorytm błędnie zaklasyfikuje zdrowego pacjenta jako chorego to nic złego się nie stanie - pacjent zostanie poddany dodatkowym badaniom, które wykluczą chorobę. Natomiast gdy algorytm będzie błędnie klasyfikował chorych pacjentów jako zdrowych - to taki model nie będzie się nadawał do praktycznych zastosowań. Częstym wymogiem jest osiągnięcie przez model określonego poziomu specyfikacji (np. TN / N powyżej 95%) zamiast maksymalizacji dokładności.
+
+5.  Co możemy zrobić, aby zwiększyć poziom specyfikacji modelu?
+
+## Algorytm k najbliższych sąsiadów
+
+Bardzo prosty i dosyć intuicyjny algorytm, które możemy wykorzystać zarówno do klasyfikacji jak i do regresji. Zacznijmy od klasyfikacji.
+
+### Klasyfikacja
+
+```{r}
+data("Default")
+
+df = Default %>%
+  select(-student)
+
+set.seed(123)
+train_index = sample(1:nrow(df), 0.70 * nrow(df))
+df_train = df[train_index, ]
+df_test = df[-train_index, ]
+
+df_train_scaled = df_train %>%
+    select(-default) %>%
+    as.matrix() %>%
+    scale()
+
+df_test_scaled = df_test %>%
+      select(-default) %>%
+      as.matrix() %>%
+      scale()
+
+y_hat = knn(
+  train = df_train_scaled
+  , cl = df_train$default
+  
+  , test = df_test_scaled
+  , k = 3
+)
+
+confusionMatrix(y_hat, df_test$default)
+```
+
+Algorytm działa następująco:
+
+1.  Wybieramy liczbę naturalną $k$.
+
+2.  Dla każdej nowej obserwacji liczymy jej *odległość* do wszystkich obserwacji w zbiorze treningowym.
+
+3.  Sortujemy odległości od najmniejszej do największej.
+
+4.  Nowej obserwacji przypisujemy klasę do której należy większość z jej $k$ sąsiadów. Gdy $k$ jest parzyste to mogą wystąpić tzw. *ties* - wówczas przypisujemy klasę najbliższego sąsiada lub redukujemy $k$ o $1$ lub przypisujemy klasę losowo.
+
+Kluczowym pojęciem jest tutaj odległość. Możemy zastosować różne definicje odległości, natomiast najczęściej stosowaną jest zwykła metryka euklidesowa. Musimy jednak ustandaryzować zmienne, ponieważ większość metryka, a w szczególności metryka euklidesowa, są wrażliwe na skalę.
+
+```{r}
+# kod
+```
+
+W języku R implementację powyższego algorytmu znajdziemy w funkcji `knn` z biblioteki `class`.
+
+```{r}
+# kod
+```
+
+Teraz możemy porównać z klasami ze zbioru testowego.
+
+```{r}
+# kod
+```
+
+Wizualizacja całej przestrzeni podzielonej granicą decyzyjną na dwa obszary.
+
+```{r}
+df_train_example = downSample(
+  x = df_train_scaled
+  , y = df_train$default
+  , yname = 'default'
+)
+
+df_grid = expand.grid(
+  balance = seq(
+    min(df_train_example$balance)
+    , max(df_train_example$balance)
+    , by = 0.1
+  )
+  , income = seq(
+    min(df_train_example$income)
+    , max(df_train_example$income)
+    , by = 0.1
+  )
+)
+
+df_grid = df_grid %>%
+  mutate(Pred = knn(
+    train = df_train_example %>% select(-default)
+    , test = df_grid
+    , cl = df_train_example$default
+    , k = 50
+  ))
+  
+ggplot() +
+  geom_point(
+    data = df_train_example %>% as.data.frame()
+    , mapping = aes(x = income, y = balance, color = default)
+  ) +
+  geom_tile(
+    data = df_grid
+    , mapping = aes(x = income, y = balance, fill = Pred)
+    , alpha = 0.3
+  )
+```
+
+### Regresja
+
+Algorytm działa bardzo podobnie jak w przypadku klasyfikacji. Nowej obserwacji przypisujemy średnią wartość zmiennej celu jej $k$ najbliższych sąsiadów. Oczywiście zamiast średniej możemy wybrać inną statystykę, np. medianę.
+
+```{r}
+df = read.csv(
+  'data\\insurance.csv'
+  , stringsAsFactors = TRUE
+)
+
+df_scaled = df %>%
+  select(age, bmi, children) %>%
+  scale()
+
+df_scaled = df_scaled %>%
+  cbind(df %>% select(sex, smoker, region, charges))
+
+model_1 = caret::knnreg(
+  formula = charges ~ .
+  , k = 5
+  , data = df_scaled
+)
+
+y_hat = predict(model_1, df_scaled)
+RMSE(y_hat, df_scaled$charges) / mean(df_scaled$charges)
+```
+
+### Zadania
+
+1.  Znajdź optymalną wartość $k$ dla danych `Default`, tak aby zminimalizować błąd walidacyjny.
+
+2.  Znajdź optymalną wartość $k$ dla danych `Insurance`, tak aby zminimalizować błąd walidacyjny.
+
+3.  Napisz funkcję, która podzieli zbiór danych na zbiór treningowy i testowy w zadanych proporcjach. Opcjonalnie funkcja może dokonywać skalowanie zmiennych. Będziemy z tej funkcji korzystać przy poznawaniu kolejnych algorytmów.
+
+## Regularyzacja
+
+```{r}
+df = read.csv('data\\gene_expression.csv')
+
+set.seed(123)
+train_index = sample(1:nrow(df), 0.70 * nrow(df))
+df_train = df[train_index, ]
+df_test = df[-train_index, ]
+```
+
+```{r}
+model_1 = lm(disease_indicator ~ ., data = df_train)
+
+y_hat_train = predict(model_1, newdata = df_train)
+y_hat_test = predict(model_1, newdata = df_test)
+```
+
+Poniżej widzimy, że funkcja straty na zbiorze treningowym wynosi $0$, natomiast funkcja straty na zbiorze testowym ma bardzo dużą wartość. Model został przetrenowany (ang. *overfitting*).
+
+```{r}
+# MSE treningowy
+RMSE(y_hat_train, df_train$disease_indicator)
+
+# MSE testowy
+RMSE(y_hat_test, df_test$disease_indicator)
+```
+
+### Regresja typu ridge oraz lasso
+
+```{r}
+X_train = df_train %>% select(-disease_indicator) %>% as.matrix()
+X_test = df_test %>% select(-disease_indicator) %>% as.matrix()
+y_train = df_train %>% pull(disease_indicator)
+y_test = df_test %>% pull(disease_indicator)
+
+model_ridge = cv.glmnet(
+  x = X_train
+  , y = y_train
+  , nfolds = 5
+  , alpha = 0
+)
+
+y_hat_train = predict(
+  model_ridge
+  , newx = X_train
+  , s = model_ridge$lambda.min
+)
+
+y_hat_test = predict(
+  model_ridge
+  , newx = X_test
+  , s = model_ridge$lambda.min
+)
+
+# MSE treningowy
+RMSE(y_hat_train, df_train$disease_indicator)
+
+# MSE testowy
+RMSE(y_hat_test, df_test$disease_indicator)
+```
+
+```{r}
+model_lasso = cv.glmnet(
+  x = X_train
+  , y = y_train
+  , nfolds = 5
+  , alpha = 1
+)
+
+y_hat_train = predict(
+  model_lasso
+  , newx = X_train
+  , s = model_lasso$lambda.min
+)
+
+y_hat_test = predict(
+  model_lasso
+  , newx = X_test
+  , s = model_lasso$lambda.min
+)
+
+# MSE treningowy
+RMSE(y_hat_train, df_train$disease_indicator)
+
+# MSE testowy
+RMSE(y_hat_test, df_test$disease_indicator)
+```
+
+```{r}
+coef(model_lasso)
+```
+
+W regresji grzbietowej niektóre wartości współczynników $\hat{\beta}$ są bliskie $0$, ale nigdy nie osiągają tej wartości - metoda regresji grzbietowej pozwala tylko na dojście asymptotycznie blisko do $0$. W przypadku regresji lasso dostajemy zerowe współczynniki - daje nam to bardzo przydatną własność, mianowicie lasso działa jak **selektor zmiennych**.
+
+### Regresja elastic net
+
+Aby uzyskać korzyści płynące z regresji grzbietowej (penalizacja skorelowanych zmiennych objaśniających) oraz regresji lasso (selekcja zmiennych), możemy do funkcji straty dodać średnią ważoną z regresji ridge oraz lasso. Jest to tzw. model *elastic-net*:
+
+```{r}
+model_elnet = cv.glmnet(
+  x = X_train
+  , y = y_train
+  , nfolds = 5
+  , alpha = 0.5
+)
+
+y_hat_train = predict(
+  model_elnet
+  , newx = X_train
+  , s = model_elnet$lambda.min
+)
+
+y_hat_test = predict(
+  model_elnet
+  , newx = X_test
+  , s = model_elnet$lambda.min
+)
+
+# MSE treningowy
+RMSE(y_hat_train, df_train$disease_indicator)
+
+# MSE testowy
+RMSE(y_hat_test, df_test$disease_indicator)
+
+```
+
+### Zadania
+
+1.  Do zbioru danych `heart_disease.csv` znajdź optymalne parametry $\lambda$ oraz $\alpha$, aby zminimalizować błąd prognozy na zbiorze walidacyjnym.
